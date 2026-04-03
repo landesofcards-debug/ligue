@@ -134,7 +134,6 @@ class SaisieMatchPanel(QWidget):
         
         self.combo_jeu_1v1 = QComboBox()
         self.combo_jeu_1v1.setMinimumWidth(300)
-        # Branchement sur le filtre de joueurs 1v1
         self.combo_jeu_1v1.currentIndexChanged.connect(self._on_jeu_1v1_changed)
         layout_jeu.addWidget(self.combo_jeu_1v1)
         
@@ -190,7 +189,7 @@ class SaisieMatchPanel(QWidget):
         layout_scores_btns = QHBoxLayout()
         self.group_scores = QButtonGroup(self)
         
-        for score in ["2-0", "2-1", "1-1", "1-2", "0-2"]:
+        for score in ["2-0", "2-1", "1-0", "1-1", "0-1", "1-2", "0-2"]:
             btn = QRadioButton(score)
             btn.setStyleSheet("border: none; background: transparent;")
             self.group_scores.addButton(btn)
@@ -218,7 +217,6 @@ class SaisieMatchPanel(QWidget):
         
         self.combo_jeu_2v2 = QComboBox()
         self.combo_jeu_2v2.setMinimumWidth(300)
-        # Branchement sur le filtre de joueurs 2v2
         self.combo_jeu_2v2.currentIndexChanged.connect(self._on_jeu_2v2_changed)
         layout_jeu.addWidget(self.combo_jeu_2v2)
         layout.addWidget(frame_jeu, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -272,7 +270,7 @@ class SaisieMatchPanel(QWidget):
         layout_scores_btns = QHBoxLayout()
         self.group_scores_2v2 = QButtonGroup(self)
         
-        for score in ["2-0", "2-1", "1-1", "1-2", "0-2"]:
+        for score in ["2-0", "2-1", "1-0", "1-1", "0-1", "1-2", "0-2"]:
             btn = QRadioButton(score)
             btn.setStyleSheet("border: none; background: transparent;")
             self.group_scores_2v2.addButton(btn)
@@ -299,7 +297,6 @@ class SaisieMatchPanel(QWidget):
         frame_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.combo_jeu_multi = QComboBox()
-        # Branchement sur le filtre de joueurs Multi
         self.combo_jeu_multi.currentIndexChanged.connect(self._on_jeu_multi_changed)
         frame_layout.addWidget(self.combo_jeu_multi, alignment=Qt.AlignmentFlag.AlignCenter)
         frame_layout.addSpacing(30)
@@ -404,6 +401,7 @@ class SaisieMatchPanel(QWidget):
             
         conn.close()
 
+# <VALIDATED>
     def _valider_1v1(self):
         jeu_nom = self.combo_jeu_1v1.currentText()
         p1_nom = self.combo_p1.currentText()
@@ -412,7 +410,6 @@ class SaisieMatchPanel(QWidget):
         btn_score = self.group_scores.checkedButton()
         
         if not btn_score or "Choisir" in p1_nom or "Choisir" in p2_nom or "Choisir" in jeu_nom or p1_nom == p2_nom:
-            QMessageBox.warning(self, "Erreur", "Sélection invalide ou score manquant.")
             return
 
         score = btn_score.text()
@@ -455,30 +452,35 @@ class SaisieMatchPanel(QWidget):
         cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp_j1, j1['id']))
         cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp_j2, j2['id']))
 
+        conn.commit()
+        conn.close()
+
         self.mechanics.check_progression_rewards(j1['id'], j1['xp_total'], new_xp_j1)
         self.mechanics.check_progression_rewards(j2['id'], j2['xp_total'], new_xp_j2)
-        
         self.mechanics.evaluer_etoiles_direct(j1['id'])
         self.mechanics.evaluer_etoiles_direct(j2['id'])
 
-        msg_boss = ""
         if est_boss:
             vainqueur_id = j1['id'] if s1 > s2 else j2['id'] if s2 > s1 else None
             if vainqueur_id:
                 victoire_joueur = (vainqueur_id == self.current_boss_data['challenger_id'])
-                result_boss = self.mechanics.executer_combat_boss(self.current_boss_data['challenger_id'], self.current_boss_data['id'], victoire_joueur)
-                msg_boss = f"\n\n🐉 {result_boss['message']}"
+                self.mechanics.executer_combat_boss(self.current_boss_data['challenger_id'], self.current_boss_data['id'], victoire_joueur)
         else:
             vainqueur_id = j1['id'] if s1 > s2 else j2['id'] if s2 > s1 else None
             perdant_id = j2['id'] if s1 > s2 else j1['id'] if s2 > s1 else None
             if vainqueur_id and perdant_id:
-                if self.mechanics.verifier_et_valider_contrat(vainqueur_id, perdant_id, jeu_id):
-                    msg_boss = "\n\n🎯 CONTRAT REMPLI ! La cible a été éliminée et un nouveau contrat a été attribué."
+                self.mechanics.verifier_et_valider_contrat(vainqueur_id, perdant_id, jeu_id)
 
-        conn.commit()
-        conn.close()
+        # --- NOUVEAU MESSAGE FLOTTANT VERT ---
+        self.msg_flottant_1v1 = QLabel(f"✅ MATCH VALIDÉ ! ({p1_nom} +{xp_j1} XP | {p2_nom} +{xp_j2} XP)", self)
+        self.msg_flottant_1v1.setStyleSheet("background-color: rgba(0, 255, 157, 0.9); color: black; font-family: 'Orbitron'; font-size: 22px; font-weight: bold; padding: 20px; border-radius: 10px; border: 2px solid white;")
+        self.msg_flottant_1v1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.msg_flottant_1v1.adjustSize()
+        self.msg_flottant_1v1.move((self.width() - self.msg_flottant_1v1.width()) // 2, (self.height() - self.msg_flottant_1v1.height()) // 2)
+        self.msg_flottant_1v1.show()
+        
+        QTimer.singleShot(2000, self.msg_flottant_1v1.deleteLater)
 
-        QMessageBox.information(self, "Succès", f"Match validé !\n{p1_nom} gagne {xp_j1} XP\n{p2_nom} gagne {xp_j2} XP{msg_boss}")
         self.group_scores.setExclusive(False)
         btn_score.setChecked(False)
         self.group_scores.setExclusive(True)
@@ -495,7 +497,6 @@ class SaisieMatchPanel(QWidget):
 
         joueurs = [t1_p1, t1_p2, t2_p1, t2_p2]
         if not btn_score or "Choisir" in jeu_nom or any("Choisir" in j for j in joueurs) or len(set(joueurs)) != 4:
-            QMessageBox.warning(self, "Erreur", "Sélection invalide ou joueurs en double.")
             return
 
         score = btn_score.text()
@@ -513,8 +514,8 @@ class SaisieMatchPanel(QWidget):
             ids[nom] = cursor.fetchone()
 
         aujourdhui = datetime.now().strftime('%Y-%m-%d')
-        
-        xp_distribues = []
+        operations_joueurs = []
+
         for joueur_nom in joueurs:
             j_id = ids[joueur_nom]['id']
             j_xp_actuel = ids[joueur_nom]['xp_total']
@@ -530,9 +531,7 @@ class SaisieMatchPanel(QWidget):
             new_xp = j_xp_actuel + xp_gain
             
             cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp, j_id))
-            self.mechanics.check_progression_rewards(j_id, j_xp_actuel, new_xp)
-            self.mechanics.evaluer_etoiles_direct(j_id)
-            xp_distribues.append(f"{joueur_nom} : +{xp_gain} XP")
+            operations_joueurs.append({'id': j_id, 'old_xp': j_xp_actuel, 'new_xp': new_xp})
 
         res_t1 = f"Victoire {score}" if s1 > s2 else f"Égalité {score}" if s1 == s2 else f"Défaite {score}"
         res_t2 = f"Victoire {s2}-{s1}" if s2 > s1 else f"Égalité {s2}-{s1}" if s2 == s1 else f"Défaite {s2}-{s1}"
@@ -545,7 +544,20 @@ class SaisieMatchPanel(QWidget):
         conn.commit()
         conn.close()
 
-        QMessageBox.information(self, "Succès", "Match 2v2 validé !\n" + "\n".join(xp_distribues))
+        for op in operations_joueurs:
+            self.mechanics.check_progression_rewards(op['id'], op['old_xp'], op['new_xp'])
+            self.mechanics.evaluer_etoiles_direct(op['id'])
+
+        # --- NOUVEAU MESSAGE FLOTTANT VERT ---
+        self.msg_flottant_2v2 = QLabel("✅ MATCH 2 VS 2 VALIDÉ !", self)
+        self.msg_flottant_2v2.setStyleSheet("background-color: rgba(0, 255, 157, 0.9); color: black; font-family: 'Orbitron'; font-size: 22px; font-weight: bold; padding: 20px; border-radius: 10px; border: 2px solid white;")
+        self.msg_flottant_2v2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.msg_flottant_2v2.adjustSize()
+        self.msg_flottant_2v2.move((self.width() - self.msg_flottant_2v2.width()) // 2, (self.height() - self.msg_flottant_2v2.height()) // 2)
+        self.msg_flottant_2v2.show()
+        
+        QTimer.singleShot(2000, self.msg_flottant_2v2.deleteLater)
+
         self.group_scores_2v2.setExclusive(False)
         btn_score.setChecked(False)
         self.group_scores_2v2.setExclusive(True)
@@ -558,7 +570,6 @@ class SaisieMatchPanel(QWidget):
         tous_joueurs = [gagnant] + perdants
 
         if "Choisir" in jeu_nom or "Choisir" in gagnant or not perdants or len(set(tous_joueurs)) != len(tous_joueurs):
-            QMessageBox.warning(self, "Erreur", "Sélectionnez un gagnant, au moins un perdant, et évitez les doublons.")
             return
 
         conn = self.db.get_connection()
@@ -568,7 +579,7 @@ class SaisieMatchPanel(QWidget):
         jeu_id = cursor.fetchone()['id']
 
         aujourdhui = datetime.now().strftime('%Y-%m-%d')
-        xp_distribues = []
+        operations_joueurs = []
         
         for nom in tous_joueurs:
             cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (nom,))
@@ -582,9 +593,7 @@ class SaisieMatchPanel(QWidget):
             
             new_xp = j['xp_total'] + xp_gain
             cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp, j['id']))
-            self.mechanics.check_progression_rewards(j['id'], j['xp_total'], new_xp)
-            self.mechanics.evaluer_etoiles_direct(j['id'])
-            xp_distribues.append(f"{nom} : +{xp_gain} XP")
+            operations_joueurs.append({'id': j['id'], 'old_xp': j['xp_total'], 'new_xp': new_xp})
 
         cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (gagnant,))
         g_id = cursor.fetchone()['id']
@@ -599,8 +608,20 @@ class SaisieMatchPanel(QWidget):
         conn.commit()
         conn.close()
 
-        QMessageBox.information(self, "Succès", "Match Multijoueur validé !\n" + "\n".join(xp_distribues))
+        for op in operations_joueurs:
+            self.mechanics.check_progression_rewards(op['id'], op['old_xp'], op['new_xp'])
+            self.mechanics.evaluer_etoiles_direct(op['id'])
 
+        # --- NOUVEAU MESSAGE FLOTTANT VERT ---
+        self.msg_flottant_multi = QLabel("✅ MATCH MULTIJOUEUR VALIDÉ !", self)
+        self.msg_flottant_multi.setStyleSheet("background-color: rgba(0, 255, 157, 0.9); color: black; font-family: 'Orbitron'; font-size: 22px; font-weight: bold; padding: 20px; border-radius: 10px; border: 2px solid white;")
+        self.msg_flottant_multi.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.msg_flottant_multi.adjustSize()
+        self.msg_flottant_multi.move((self.width() - self.msg_flottant_multi.width()) // 2, (self.height() - self.msg_flottant_multi.height()) // 2)
+        self.msg_flottant_multi.show()
+        
+        QTimer.singleShot(2000, self.msg_flottant_multi.deleteLater)
+# </VALIDATED>
     def _apply_stylesheet(self):
         self.setStyleSheet("""
             QComboBox { background-color: #141928; color: white; border: 1px solid #00f3ff; border-radius: 5px; padding: 12px; font-family: 'Rajdhani'; font-size: 20px; min-width: 350px; }
