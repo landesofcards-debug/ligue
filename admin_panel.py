@@ -2,11 +2,13 @@
 import os
 import shutil
 from datetime import datetime
+# <VALIDATED>
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, 
                              QLabel, QLineEdit, QPushButton, QTableWidget, 
                              QTableWidgetItem, QHeaderView, QCheckBox, QGridLayout, 
                              QFormLayout, QMessageBox, QGroupBox, QFileDialog,
-                             QComboBox, QSpinBox, QDateEdit)
+                             QComboBox, QSpinBox, QDateEdit, QScrollArea)
+# </VALIDATED>
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QIcon
 import qtawesome as qta
@@ -45,6 +47,7 @@ class AdminPanel(QWidget):
         self._load_events_data()
         super().showEvent(event)
 
+# <VALIDATED>
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -73,12 +76,17 @@ class AdminPanel(QWidget):
         self._setup_tab_events()
         self.tabs.addTab(self.tab_events, "Événements (RPG)")
 
-        # --- NOUVEL ONGLET PARAMÈTRES ---
         self.tab_settings = QWidget()
         self._setup_tab_settings()
         self.tabs.addTab(self.tab_settings, "Paramètres")
 
+        # --- NOUVEL ONGLET AIDE ---
+        self.tab_aide = QWidget()
+        self._setup_tab_aide()
+        self.tabs.addTab(self.tab_aide, "Aide & Règles")
+
         layout.addWidget(self.tabs)
+# </VALIDATED>
 
     def _setup_tab_joueurs(self):
         layout = QHBoxLayout(self.tab_joueurs)
@@ -132,9 +140,18 @@ class AdminPanel(QWidget):
         right_panel.addLayout(form_xp)
 
         row_btns = QHBoxLayout()
+        
+        # --- NOUVEAU BOUTON : Vider les champs ---
+        self.btn_new_joueur = QPushButton("  Nouveau Joueur")
+        self.btn_new_joueur.setIcon(qta.icon("fa5s.user-plus", color="white"))
+        self.btn_new_joueur.clicked.connect(self._reset_joueur_form)
+        self.btn_new_joueur.setStyleSheet("background-color: rgba(0, 243, 255, 0.1); border: 1px solid #00f3ff;")
+        
         self.btn_save_joueur = QPushButton("  Mettre à jour / Créer")
         self.btn_save_joueur.setIcon(qta.icon("fa5s.save", color="white"))
         self.btn_save_joueur.clicked.connect(self._save_joueur)
+        
+        row_btns.addWidget(self.btn_new_joueur)
         row_btns.addWidget(self.btn_save_joueur)
         
         right_panel.addLayout(row_btns)
@@ -280,13 +297,20 @@ class AdminPanel(QWidget):
         file_path, _ = QFileDialog.getOpenFileName(self, "Choisir un Avatar", "", "Images (*.png *.jpg *.jpeg *.svg)")
         if file_path:
             nom_fichier = os.path.basename(file_path)
-            dest_path = os.path.join(self.avatars_dir, nom_fichier)
-            if file_path != dest_path:
+            
+            # --- CORRECTION DU BUG DOSSIER OCCUPÉ ---
+            # normpath et abspath permettent de s'assurer que Windows comprend
+            # exactement le chemin pour la comparaison
+            dest_path = os.path.normpath(os.path.abspath(os.path.join(self.avatars_dir, nom_fichier)))
+            source_path = os.path.normpath(os.path.abspath(file_path))
+
+            if source_path != dest_path:
                 try:
-                    shutil.copy2(file_path, dest_path)
+                    shutil.copy2(source_path, dest_path)
                 except Exception as e:
                     QMessageBox.warning(self, "Erreur de copie", f"Impossible de copier l'image : {str(e)}")
                     return
+            
             self.current_avatar_file = nom_fichier
             self.lbl_avatar_info.setText(f"Avatar : {nom_fichier}")
 
@@ -701,7 +725,66 @@ class AdminPanel(QWidget):
         layout.addWidget(group_stars)
         
         layout.addStretch()
+# <VALIDATED>
+    def _setup_tab_aide(self):
+        layout = QVBoxLayout(self.tab_aide)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(container)
+        
+        aide_text = """
+        <h2 style='color: #bc13fe; font-family: Orbitron;'>📖 GUIDE MÉMOIRE DE LA LIGUE</h2>
+        
+        <h3 style='color: #00f3ff; font-family: Orbitron;'>⚔️ NÉMÉSIS ET PROIE</h3>
+        <p>Les rivalités s'affichent sur le profil joueur uniquement après un certain nombre de matchs :</p>
+        <ul>
+            <li><b>Némésis :</b> Le joueur contre qui le participant a <b>perdu au moins 5 fois</b>.</li>
+            <li><b>Proie :</b> Le joueur contre qui le participant a <b>gagné au moins 5 fois</b>.</li>
+        </ul>
 
+        <h3 style='color: #00f3ff; font-family: Orbitron;'>🐉 LES BOSS DE LIGUE</h3>
+        <p>Invoquer un Boss permet de créer un événement communautaire autour d'un joueur ciblé.</p>
+        <ul>
+            <li><b>Points de Vie (PV) :</b> Chaque défaite du Boss lui fait perdre 1 PV. À 0 PV, il est vaincu.</li>
+            <li><b>Victoires (Coupes) :</b> Le Boss gagne 1 coupe par victoire. S'il atteint l'objectif, il gagne son défi.</li>
+            <li><b>Règle d'or :</b> Un joueur ne peut tenter sa chance contre le Boss qu'<b>une seule fois par semaine</b>.</li>
+            <li><b>Récompense :</b> Si le Boss survit jusqu'au Reset du mardi, ou s'il remplit son objectif de coupes, il gagne +3.0 XP.</li>
+        </ul>
+
+        <h3 style='color: #00f3ff; font-family: Orbitron;'>🎯 LES CONTRATS (TUEURS À GAGES)</h3>
+        <p>Le générateur crée une boucle d'assassinats sur un jeu spécifique (ex: A traque B, B traque C, C traque A).</p>
+        <ul>
+            <li>La cible du joueur s'affiche sur son profil. S'il est l'heureux chasseur et qu'il bat sa cible, <b>le contrat est rempli !</b></li>
+            <li>La cible vaincue est éliminée du jeu des tueurs à gages.</li>
+            <li>Le vainqueur hérite de la cible de sa victime (Si A bat B, A doit maintenant traquer C).</li>
+        </ul>
+
+        <h3 style='color: #00f3ff; font-family: Orbitron;'>📈 POINTS D'EXPÉRIENCE (XP) ET BONUS</h3>
+        <p>L'XP de base (modifiable dans l'onglet "Saison, Paramètres & Niveaux") s'enrichit automatiquement de bonus cachés :</p>
+        <ul>
+            <li><b>Bonus de Premier Match :</b> Accordé pour le tout premier match de la journée.</li>
+            <li><b>Bonus de Première Rencontre :</b> Accordé la première fois qu'un joueur en affronte un autre dans la journée.</li>
+            <li><b>Bonus Underdog :</b> +0.5 XP si l'on bat un joueur mieux classé (Niveau supérieur).</li>
+            <li><b>Malus Surclassement :</b> -0.5 XP si l'on s'acharne sur un joueur beaucoup plus faible (-2 niveaux ou pire).</li>
+        </ul>
+        """
+        
+        lbl_aide = QLabel(aide_text)
+        lbl_aide.setWordWrap(True)
+        lbl_aide.setStyleSheet("color: #e0f7fa; font-family: 'Rajdhani'; font-size: 16px; line-height: 1.5;")
+        lbl_aide.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        lay.addWidget(lbl_aide)
+        lay.addStretch()
+        
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+# </VALIDATED>
     def _change_admin_pin(self):
         new_pin = self.edit_new_pin.text().strip()
         if not new_pin:

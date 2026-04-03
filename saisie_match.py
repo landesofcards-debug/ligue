@@ -1,7 +1,7 @@
 # <VALIDATED>
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget,
                              QComboBox, QPushButton, QFrame, QRadioButton, QButtonGroup, 
-                             QGridLayout, QMessageBox, QDialog)
+                             QGridLayout, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 from datetime import datetime
@@ -32,49 +32,81 @@ class SaisieMatchPanel(QWidget):
         conn = self.db.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT surnom FROM joueurs WHERE surnom IS NOT NULL AND surnom != '' ORDER BY surnom ASC")
-        pseudos = [row["surnom"] for row in cursor.fetchall()]
-        
         cursor.execute("SELECT nom FROM jeux WHERE actif = 1 ORDER BY nom ASC")
         jeux = [row["nom"] for row in cursor.fetchall()]
         conn.close()
 
-        for combo in [self.combo_p1, self.combo_p2, self.combo_t1_p1, self.combo_t1_p2, self.combo_t2_p1, self.combo_t2_p2]:
+        for combo in [self.combo_jeu_1v1, self.combo_jeu_2v2, self.combo_jeu_multi]:
+            current_game = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(jeux)
+            idx = combo.findText(current_game)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        # Force la mise à jour des joueurs selon le jeu par défaut sélectionné
+        self._on_jeu_1v1_changed()
+        self._on_jeu_2v2_changed()
+        self._on_jeu_multi_changed()
+
+    def _update_player_combos(self, combo_jeu, combos_joueurs):
+        """Filtre dynamiquement les listes déroulantes de joueurs selon le jeu."""
+        nom_jeu = combo_jeu.currentText()
+        if not nom_jeu:
+            return
+
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        
+        # On cherche uniquement les joueurs inscrits à ce jeu précis
+        cursor.execute("""
+            SELECT j.surnom 
+            FROM joueurs j
+            JOIN joueurs_jeux jj ON j.id = jj.joueur_id
+            JOIN jeux jeu ON jj.jeu_id = jeu.id
+            WHERE jeu.nom = ? AND j.surnom IS NOT NULL AND j.surnom != ''
+            ORDER BY j.surnom ASC
+        """, (nom_jeu,))
+            
+        pseudos = [row["surnom"] for row in cursor.fetchall()]
+        conn.close()
+
+        for combo in combos_joueurs:
+            current_text = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
             combo.addItem("Choisir un joueur...")
             combo.addItems(pseudos)
+            
+            idx = combo.findText(current_text)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setCurrentIndex(0)
             combo.blockSignals(False)
 
-        for combo in [self.combo_jeu_1v1, self.combo_jeu_2v2, self.combo_jeu_multi]:
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem("Choisir le jeu...")
-            combo.addItems(jeux)
-            combo.blockSignals(False)
+    def _on_jeu_1v1_changed(self):
+        if hasattr(self, 'combo_p1') and hasattr(self, 'combo_p2'):
+            self._update_player_combos(self.combo_jeu_1v1, [self.combo_p1, self.combo_p2])
+            self._check_events_1v1()
 
-        self.combo_gagnant.clear()
-        self.combo_gagnant.addItem("Choisir le gagnant...")
-        self.combo_gagnant.addItems(pseudos)
-        
-        for cb in self.combos_multi_others:
-            cb.clear()
-            cb.addItem("Choisir un joueur...")
-            cb.addItems(pseudos)
-                
-        self._check_events_1v1()
+    def _on_jeu_2v2_changed(self):
+        if hasattr(self, 'combo_t1_p1'):
+            self._update_player_combos(self.combo_jeu_2v2, [self.combo_t1_p1, self.combo_t1_p2, self.combo_t2_p1, self.combo_t2_p2])
+
+    def _on_jeu_multi_changed(self):
+        if hasattr(self, 'combo_gagnant') and hasattr(self, 'combos_multi_others'):
+            combos = [self.combo_gagnant] + self.combos_multi_others
+            self._update_player_combos(self.combo_jeu_multi, combos)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 20, 40, 20)
-        layout.setSpacing(20)
-
-        title = QLabel("ENREGISTRER UN MATCH")
-        title.setObjectName("page_title")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("saisie_tabs")
         
         self.tab_1v1 = QWidget()
         self._setup_tab_1v1()
@@ -86,15 +118,9 @@ class SaisieMatchPanel(QWidget):
 
         self.tab_multi = QWidget()
         self._setup_tab_multi()
-        self.tabs.addTab(self.tab_multi, "Match Multijoueur")
-        
-        layout.addWidget(self.tabs)
+        self.tabs.addTab(self.tab_multi, "Multijoueur (3+)")
 
-        self.lbl_feedback = QLabel("")
-        self.lbl_feedback.setObjectName("lbl_feedback")
-        self.lbl_feedback.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_feedback.hide()
-        layout.addWidget(self.lbl_feedback)
+        layout.addWidget(self.tabs)
 
     def _setup_tab_1v1(self):
         layout = QVBoxLayout(self.tab_1v1)
@@ -108,8 +134,14 @@ class SaisieMatchPanel(QWidget):
         
         self.combo_jeu_1v1 = QComboBox()
         self.combo_jeu_1v1.setMinimumWidth(300)
-        self.combo_jeu_1v1.currentIndexChanged.connect(self._check_events_1v1)
+        # Branchement sur le filtre de joueurs 1v1
+        self.combo_jeu_1v1.currentIndexChanged.connect(self._on_jeu_1v1_changed)
         layout_jeu.addWidget(self.combo_jeu_1v1)
+        
+        self.lbl_event_alert = QLabel("")
+        self.lbl_event_alert.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_event_alert.hide()
+        layout_jeu.addWidget(self.lbl_event_alert)
         
         layout.addWidget(frame_jeu, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(1)
@@ -186,6 +218,8 @@ class SaisieMatchPanel(QWidget):
         
         self.combo_jeu_2v2 = QComboBox()
         self.combo_jeu_2v2.setMinimumWidth(300)
+        # Branchement sur le filtre de joueurs 2v2
+        self.combo_jeu_2v2.currentIndexChanged.connect(self._on_jeu_2v2_changed)
         layout_jeu.addWidget(self.combo_jeu_2v2)
         layout.addWidget(frame_jeu, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(1)
@@ -265,6 +299,8 @@ class SaisieMatchPanel(QWidget):
         frame_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.combo_jeu_multi = QComboBox()
+        # Branchement sur le filtre de joueurs Multi
+        self.combo_jeu_multi.currentIndexChanged.connect(self._on_jeu_multi_changed)
         frame_layout.addWidget(self.combo_jeu_multi, alignment=Qt.AlignmentFlag.AlignCenter)
         frame_layout.addSpacing(30)
 
@@ -302,362 +338,272 @@ class SaisieMatchPanel(QWidget):
         layout.addStretch(1)
 
     def _check_events_1v1(self):
-        """Vérifie en direct si le match sélectionné est un combat de Boss valide."""
-        p1_name = self.combo_p1.currentText()
-        p2_name = self.combo_p2.currentText()
-        jeu_name = self.combo_jeu_1v1.currentText()
-
-        self.btn_valider_1v1.setText("VALIDER LE MATCH")
-        self.btn_valider_1v1.setIcon(QIcon())
-        self.btn_valider_1v1.setStyleSheet("")
+        p1 = self.combo_p1.currentText()
+        p2 = self.combo_p2.currentText()
+        jeu_nom = self.combo_jeu_1v1.currentText()
+        
+        self.lbl_event_alert.hide()
         self.current_boss_data = None
+        self.btn_valider_1v1.setText("VALIDER LE MATCH")
+        self.btn_valider_1v1.setStyleSheet("")
 
-        if "Choisir" in p1_name or "Choisir" in p2_name or "Choisir" in jeu_name or p1_name == p2_name:
+        if "Choisir" in p1 or "Choisir" in p2 or p1 == p2:
             return
 
         conn = self.db.get_connection()
         cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (p1,))
+        p1_id = cursor.fetchone()['id']
+        cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (p2,))
+        p2_id = cursor.fetchone()['id']
+        cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_nom,))
+        jeu_row = cursor.fetchone()
         
-        try:
-            cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (p1_name,))
-            j1 = cursor.fetchone()
-            cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (p2_name,))
-            j2 = cursor.fetchone()
-            cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_name,))
-            jeu = cursor.fetchone()
-            
-            if not j1 or not j2 or not jeu:
-                return
-
-            cursor.execute("""
-                SELECT id, joueur_id FROM event_boss 
-                WHERE jeu_id = ? AND statut = 'ACTIF' AND (joueur_id = ? OR joueur_id = ?)
-            """, (jeu['id'], j1['id'], j2['id']))
-            boss_event = cursor.fetchone()
-            
-            if boss_event:
-                boss_id = boss_event['joueur_id']
-                challenger_id = j2['id'] if boss_id == j1['id'] else j1['id']
-                
-                # Vérifie si le challenger a déjà tenté sa chance
-                cursor.execute("SELECT 1 FROM event_boss_essais WHERE joueur_id = ? AND boss_id = ?", (challenger_id, boss_event['id']))
-                if not cursor.fetchone():
-                    self.current_boss_data = {
-                        'event_id': boss_event['id'],
-                        'boss_id': boss_id,
-                        'challenger_id': challenger_id
-                    }
-                    self.btn_valider_1v1.setText("  COMBAT DE BOSS")
-                    self.btn_valider_1v1.setIcon(qta.icon("fa5s.dragon", color="#ff0055"))
-                    self.btn_valider_1v1.setStyleSheet("background-color: rgba(255, 0, 85, 0.15); color: #ff0055; border: 2px solid #ff0055;")
-        finally:
-            conn.close()
-
-    def _valider_1v1(self):
-        p1_name = self.combo_p1.currentText()
-        p2_name = self.combo_p2.currentText()
-        jeu_name = self.combo_jeu_1v1.currentText()
-        selected_button = self.group_scores.checkedButton()
-        
-        if "Choisir" in p1_name or "Choisir" in p2_name or p1_name == p2_name or "Choisir" in jeu_name or not selected_button:
-            QMessageBox.warning(self, "Erreur", "Saisie incomplète ou joueurs identiques.")
-            return
-
-        score = selected_button.text()
-        s_j1, s_j2 = map(int, score.split('-'))
-
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (p1_name,))
-            j1 = cursor.fetchone()
-            cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (p2_name,))
-            j2 = cursor.fetchone()
-            cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_name,))
-            jeu_id = cursor.fetchone()['id']
-
-            today = datetime.now().strftime("%Y-%m-%d")
-            
-            # --- 1. CALCUL DE BASE NORMAL POUR TOUS ---
-            cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date LIKE ?", (j1['id'], j1['id'], f"{today}%"))
-            is_first_match_j1 = cursor.fetchone()[0] == 0
-            
-            cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date LIKE ?", (j2['id'], j2['id'], f"{today}%"))
-            is_first_match_j2 = cursor.fetchone()[0] == 0
-            
-            cursor.execute("SELECT COUNT(*) FROM matchs WHERE ((joueur1_id = ? AND joueur2_id = ?) OR (joueur1_id = ? AND joueur2_id = ?)) AND date LIKE ?", 
-                           (j1['id'], j2['id'], j2['id'], j1['id'], f"{today}%"))
-            is_first_encounter = cursor.fetchone()[0] == 0
-
-            # Calcul 100% normal (le paramètre Boss est à False pour qu'on le gère à la main ensuite)
-            xp_gain_j1 = self.mechanics.calculate_xp(s_j1, s_j2, j1['xp_total'], j2['xp_total'], False, False, is_first_match_j1, is_first_encounter)
-            xp_gain_j2 = self.mechanics.calculate_xp(s_j2, s_j1, j2['xp_total'], j1['xp_total'], False, False, is_first_match_j2, is_first_encounter)
-
-            vainqueur_id = j1['id'] if s_j1 > s_j2 else (j2['id'] if s_j2 > s_j1 else None)
-            perdant_id = j2['id'] if s_j1 > s_j2 else (j1['id'] if s_j2 > s_j1 else None)
-            perdant_name = p2_name if s_j1 > s_j2 else (p1_name if s_j2 > s_j1 else None)
-
-            msg_extra = ""
-            type_match_db = "1v1"
-            
-            # --- 2. RÉSOLUTION DES ÉVÉNEMENTS (MIEUX ISOLÉE) ---
-            
-            # A) Bonus Némésis Global (Si on bat sa Némésis, c'est toujours +1)
-            if vainqueur_id:
-                stats_vainqueur = self.mechanics.get_player_stats(vainqueur_id)
-                if stats_vainqueur['nemesis'] != "---" and perdant_name.upper() in stats_vainqueur['nemesis'].upper():
-                    if vainqueur_id == j1['id']:
-                        xp_gain_j1 += 1.0
-                    else:
-                        xp_gain_j2 += 1.0
-                    msg_extra += f"\n💀 RIVALITÉ : Némésis {perdant_name} vaincue ! (+1 XP)"
-
-            # B) Si c'est un match de Boss
-            is_boss_match = self.current_boss_data is not None
-            if is_boss_match:
-                type_match_db = "Boss"
-                challenger_id = self.current_boss_data['challenger_id']
-                event_id = self.current_boss_data['event_id']
-                
-                # Tous les participants au Raid gagnent +1
-                xp_gain_j1 += 1.0
-                xp_gain_j2 += 1.0
-                msg_extra += "\n🐉 ÉVÉNEMENT BOSS : +1 XP de participation !"
-                
-                challenger_won = (vainqueur_id == challenger_id)
-                res_combat = self.mechanics.executer_combat_boss(challenger_id, event_id, challenger_won)
-                msg_extra += "\n" + res_combat['message']
-
-            # C) Si un Contrat de Tueur à gages est accompli
-            if vainqueur_id:
-                if self.mechanics.verifier_et_valider_contrat(vainqueur_id, perdant_id, jeu_id):
-                    if vainqueur_id == j1['id']:
-                        xp_gain_j1 += 1.0
-                    else:
-                        xp_gain_j2 += 1.0
-                    msg_extra += f"\n🎯 CONTRAT REMPLI : {perdant_name} éliminé(e) ! (+1 XP)"
-
-            # --- 3. FORMATAGE DES NOMS ET INSERTION ---
-            
-            res_j1 = f"Victoire {s_j1}-{s_j2}" if s_j1 > s_j2 else (f"Défaite {s_j1}-{s_j2}" if s_j2 > s_j1 else "Egalité")
-            res_j2 = f"Victoire {s_j2}-{s_j1}" if s_j2 > s_j1 else (f"Défaite {s_j2}-{s_j1}" if s_j1 > s_j2 else "Egalité")
-
-            if is_boss_match:
-                res_j1 += " (Boss)"
-                res_j2 += " (Boss)"
-
-            cursor.execute("INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, resultat_j1, resultat_j2, xp_j1, xp_j2, type_match) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                           (j1['id'], j2['id'], jeu_id, res_j1, res_j2, xp_gain_j1, xp_gain_j2, type_match_db))
-            
-            cursor.execute("UPDATE joueurs SET xp_total = xp_total + ? WHERE id = ?", (xp_gain_j1, j1['id']))
-            cursor.execute("UPDATE joueurs SET xp_total = xp_total + ? WHERE id = ?", (xp_gain_j2, j2['id']))
-            conn.commit()
-
-        except Exception as e:
-            conn.rollback()
-            QMessageBox.critical(self, "Erreur Base de données", f"Impossible d'enregistrer : {str(e)}")
+        if not jeu_row:
             conn.close()
             return
+        jeu_id = jeu_row['id']
+
+        cursor.execute("SELECT * FROM event_tueurs WHERE chasseur_id = ? AND cible_id = ? AND jeu_id = ? AND statut = 'ACTIF'", (p1_id, p2_id, jeu_id))
+        contrat_p1 = cursor.fetchone()
+        cursor.execute("SELECT * FROM event_tueurs WHERE chasseur_id = ? AND cible_id = ? AND jeu_id = ? AND statut = 'ACTIF'", (p2_id, p1_id, jeu_id))
+        contrat_p2 = cursor.fetchone()
+
+        if contrat_p1 or contrat_p2:
+            self.lbl_event_alert.setText("🎯 CONTRAT ACTIF : Si le chasseur gagne, le contrat est rempli !")
+            self.lbl_event_alert.setStyleSheet("color: #ffea00; font-family: 'Orbitron'; font-size: 16px; font-weight: bold; background: rgba(255, 234, 0, 0.1); border: 1px solid #ffea00; padding: 10px; border-radius: 5px;")
+            self.lbl_event_alert.show()
+            conn.close()
+            return
+
+        cursor.execute("SELECT * FROM event_boss WHERE (joueur_id = ? OR joueur_id = ?) AND jeu_id = ? AND statut = 'ACTIF'", (p1_id, p2_id, jeu_id))
+        boss = cursor.fetchone()
+        
+        if boss:
+            boss_id_joueur = boss['joueur_id']
+            challenger_id = p2_id if boss_id_joueur == p1_id else p1_id
+            
+            cursor.execute("SELECT * FROM event_boss_essais WHERE joueur_id = ? AND boss_id = ?", (challenger_id, boss['id']))
+            if cursor.fetchone():
+                self.lbl_event_alert.setText("⛔ LE CHALLENGER A DÉJÀ TENTÉ SA CHANCE CETTE SEMAINE !")
+                self.lbl_event_alert.setStyleSheet("color: #ff0055; font-family: 'Orbitron'; font-size: 16px; font-weight: bold; background: rgba(255, 0, 85, 0.1); border: 1px solid #ff0055; padding: 10px; border-radius: 5px;")
+                self.lbl_event_alert.show()
+                self.btn_valider_1v1.setEnabled(False)
+            else:
+                self.current_boss_data = {'id': boss['id'], 'boss_joueur_id': boss_id_joueur, 'challenger_id': challenger_id}
+                boss_pseudo = p1 if boss_id_joueur == p1_id else p2
+                self.lbl_event_alert.setText(f"🐉 COMBAT DE BOSS : {boss_pseudo.upper()} DÉFEND SON TERRITOIRE !")
+                self.lbl_event_alert.setStyleSheet("color: #ff0055; font-family: 'Orbitron'; font-size: 16px; font-weight: bold; background: rgba(255, 0, 85, 0.1); border: 1px solid #ff0055; padding: 10px; border-radius: 5px;")
+                self.lbl_event_alert.show()
+                self.btn_valider_1v1.setText("VALIDER LE COMBAT DE BOSS")
+                self.btn_valider_1v1.setStyleSheet("background-color: rgba(255, 0, 85, 0.2); border: 2px solid #ff0055; color: white;")
+                self.btn_valider_1v1.setEnabled(True)
+        else:
+            self.btn_valider_1v1.setEnabled(True)
             
         conn.close()
 
-        # --- 4. ÉVALUATION DES NIVEAUX ET ÉTOILES ---
-        self.mechanics.check_progression_rewards(j1['id'], j1['xp_total'], j1['xp_total'] + xp_gain_j1)
-        self.mechanics.check_progression_rewards(j2['id'], j2['xp_total'], j2['xp_total'] + xp_gain_j2)
+    def _valider_1v1(self):
+        jeu_nom = self.combo_jeu_1v1.currentText()
+        p1_nom = self.combo_p1.currentText()
+        p2_nom = self.combo_p2.currentText()
+        
+        btn_score = self.group_scores.checkedButton()
+        
+        if not btn_score or "Choisir" in p1_nom or "Choisir" in p2_nom or "Choisir" in jeu_nom or p1_nom == p2_nom:
+            QMessageBox.warning(self, "Erreur", "Sélection invalide ou score manquant.")
+            return
+
+        score = btn_score.text()
+        s1, s2 = map(int, score.split('-'))
+        res_p1 = f"Victoire {score}" if s1 > s2 else f"Égalité {score}" if s1 == s2 else f"Défaite {score}"
+        res_p2 = f"Victoire {s2}-{s1}" if s2 > s1 else f"Égalité {s2}-{s1}" if s2 == s1 else f"Défaite {s2}-{s1}"
+
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (p1_nom,))
+        j1 = cursor.fetchone()
+        cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (p2_nom,))
+        j2 = cursor.fetchone()
+        cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_nom,))
+        jeu_id = cursor.fetchone()['id']
+
+        est_boss = (self.current_boss_data is not None)
+        
+        aujourdhui = datetime.now().strftime('%Y-%m-%d')
+        cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date >= ?", (j1['id'], j1['id'], aujourdhui))
+        j1_premier_match = cursor.fetchone()[0] == 0
+        cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date >= ?", (j2['id'], j2['id'], aujourdhui))
+        j2_premier_match = cursor.fetchone()[0] == 0
+
+        cursor.execute("SELECT COUNT(*) FROM matchs WHERE ((joueur1_id = ? AND joueur2_id = ?) OR (joueur1_id = ? AND joueur2_id = ?)) AND date >= ?", (j1['id'], j2['id'], j2['id'], j1['id'], aujourdhui))
+        premiere_rencontre = cursor.fetchone()[0] == 0
+
+        xp_j1 = self.mechanics.calculate_xp(s1, s2, j1['xp_total'], j2['xp_total'], est_boss and j1['id'] == self.current_boss_data['challenger_id'], False, j1_premier_match, premiere_rencontre)
+        xp_j2 = self.mechanics.calculate_xp(s2, s1, j2['xp_total'], j1['xp_total'], est_boss and j2['id'] == self.current_boss_data['challenger_id'], False, j2_premier_match, premiere_rencontre)
+
+        cursor.execute("""
+            INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, resultat_j1, resultat_j2, xp_j1, xp_j2, est_boost) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        """, (j1['id'], j2['id'], jeu_id, res_p1, res_p2, xp_j1, xp_j2))
+
+        new_xp_j1 = j1['xp_total'] + xp_j1
+        new_xp_j2 = j2['xp_total'] + xp_j2
+
+        cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp_j1, j1['id']))
+        cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp_j2, j2['id']))
+
+        self.mechanics.check_progression_rewards(j1['id'], j1['xp_total'], new_xp_j1)
+        self.mechanics.check_progression_rewards(j2['id'], j2['xp_total'], new_xp_j2)
+        
         self.mechanics.evaluer_etoiles_direct(j1['id'])
         self.mechanics.evaluer_etoiles_direct(j2['id'])
 
-        self._afficher_gains([(p1_name, xp_gain_j1), (p2_name, xp_gain_j2)], msg_extra)
-        
-        self.combo_p1.setCurrentIndex(0)
-        self.combo_p2.setCurrentIndex(0)
+        msg_boss = ""
+        if est_boss:
+            vainqueur_id = j1['id'] if s1 > s2 else j2['id'] if s2 > s1 else None
+            if vainqueur_id:
+                victoire_joueur = (vainqueur_id == self.current_boss_data['challenger_id'])
+                result_boss = self.mechanics.executer_combat_boss(self.current_boss_data['challenger_id'], self.current_boss_data['id'], victoire_joueur)
+                msg_boss = f"\n\n🐉 {result_boss['message']}"
+        else:
+            vainqueur_id = j1['id'] if s1 > s2 else j2['id'] if s2 > s1 else None
+            perdant_id = j2['id'] if s1 > s2 else j1['id'] if s2 > s1 else None
+            if vainqueur_id and perdant_id:
+                if self.mechanics.verifier_et_valider_contrat(vainqueur_id, perdant_id, jeu_id):
+                    msg_boss = "\n\n🎯 CONTRAT REMPLI ! La cible a été éliminée et un nouveau contrat a été attribué."
+
+        conn.commit()
+        conn.close()
+
+        QMessageBox.information(self, "Succès", f"Match validé !\n{p1_nom} gagne {xp_j1} XP\n{p2_nom} gagne {xp_j2} XP{msg_boss}")
         self.group_scores.setExclusive(False)
-        selected_button.setChecked(False)
+        btn_score.setChecked(False)
         self.group_scores.setExclusive(True)
         self._check_events_1v1()
 
     def _valider_2v2(self):
+        jeu_nom = self.combo_jeu_2v2.currentText()
         t1_p1 = self.combo_t1_p1.currentText()
         t1_p2 = self.combo_t1_p2.currentText()
         t2_p1 = self.combo_t2_p1.currentText()
         t2_p2 = self.combo_t2_p2.currentText()
-        jeu_name = self.combo_jeu_2v2.currentText()
-        selected_button = self.group_scores_2v2.checkedButton()
         
+        btn_score = self.group_scores_2v2.checkedButton()
+
         joueurs = [t1_p1, t1_p2, t2_p1, t2_p2]
-        
-        if any("Choisir" in j for j in joueurs) or len(set(joueurs)) != 4 or "Choisir" in jeu_name or not selected_button:
-            QMessageBox.warning(self, "Erreur", "Saisie incomplète ou joueurs en doublon.")
+        if not btn_score or "Choisir" in jeu_nom or any("Choisir" in j for j in joueurs) or len(set(joueurs)) != 4:
+            QMessageBox.warning(self, "Erreur", "Sélection invalide ou joueurs en double.")
             return
 
-        score = selected_button.text()
-        s_t1, s_t2 = map(int, score.split('-'))
-        
-        res_t1 = f"Victoire 2v2 ({score})" if s_t1 > s_t2 else (f"Défaite 2v2 ({score})" if s_t2 > s_t1 else "Egalité 2v2")
-        res_t2 = f"Victoire 2v2 ({s_t2}-{s_t1})" if s_t2 > s_t1 else (f"Défaite 2v2 ({s_t2}-{s_t1})" if s_t1 > s_t2 else "Egalité 2v2")
+        score = btn_score.text()
+        s1, s2 = map(int, score.split('-'))
 
         conn = self.db.get_connection()
         cursor = conn.cursor()
         
-        try:
-            cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom IN (?, ?, ?, ?)", (t1_p1, t1_p2, t2_p1, t2_p2))
-            db_joueurs = {row['id']: row['xp_total'] for row in cursor.fetchall()}
+        cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_nom,))
+        jeu_id = cursor.fetchone()['id']
+
+        ids = {}
+        for nom in joueurs:
+            cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (nom,))
+            ids[nom] = cursor.fetchone()
+
+        aujourdhui = datetime.now().strftime('%Y-%m-%d')
+        
+        xp_distribues = []
+        for joueur_nom in joueurs:
+            j_id = ids[joueur_nom]['id']
+            j_xp_actuel = ids[joueur_nom]['xp_total']
             
-            cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (t1_p1,))
-            id_t1_p1 = cursor.fetchone()['id']
-            cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (t1_p2,))
-            id_t1_p2 = cursor.fetchone()['id']
-            cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (t2_p1,))
-            id_t2_p1 = cursor.fetchone()['id']
-            cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (t2_p2,))
-            id_t2_p2 = cursor.fetchone()['id']
+            cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date >= ?", (j_id, j_id, aujourdhui))
+            premier_match = cursor.fetchone()[0] == 0
             
-            cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_name,))
-            jeu_id = cursor.fetchone()['id']
-
-            today = datetime.now().strftime("%Y-%m-%d")
-            xp_gains = {}
+            est_t1 = joueur_nom in [t1_p1, t1_p2]
+            score_eq = s1 if est_t1 else s2
+            score_adv = s2 if est_t1 else s1
             
-            for pid in [id_t1_p1, id_t1_p2, id_t2_p1, id_t2_p2]:
-                cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date LIKE ?", (pid, pid, f"{today}%"))
-                is_first = cursor.fetchone()[0] == 0
-                
-                is_t1 = pid in [id_t1_p1, id_t1_p2]
-                score_team = s_t1 if is_t1 else s_t2
-                score_adv = s_t2 if is_t1 else s_t1
-                
-                gain = self.mechanics.calculate_xp_2v2(score_team, score_adv, is_first, False)
-                xp_gains[pid] = gain
-
-            cursor.execute("INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, resultat_j1, resultat_j2, xp_j1, xp_j2, type_match) VALUES (?, ?, ?, ?, ?, ?, ?, '2v2')",
-                           (id_t1_p1, id_t2_p1, jeu_id, res_t1, res_t2, xp_gains[id_t1_p1], xp_gains[id_t2_p1]))
-            cursor.execute("INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, resultat_j1, resultat_j2, xp_j1, xp_j2, type_match) VALUES (?, ?, ?, ?, ?, ?, ?, '2v2')",
-                           (id_t1_p2, id_t2_p2, jeu_id, res_t1, res_t2, xp_gains[id_t1_p2], xp_gains[id_t2_p2]))
-
-            for pid, gain in xp_gains.items():
-                cursor.execute("UPDATE joueurs SET xp_total = xp_total + ? WHERE id = ?", (gain, pid))
-
-            conn.commit()
-
-        except Exception as e:
-            conn.rollback()
-            QMessageBox.critical(self, "Erreur Base de données", f"Impossible d'enregistrer : {str(e)}")
-            conn.close()
-            return
+            xp_gain = self.mechanics.calculate_xp_2v2(score_eq, score_adv, premier_match, False)
+            new_xp = j_xp_actuel + xp_gain
             
+            cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp, j_id))
+            self.mechanics.check_progression_rewards(j_id, j_xp_actuel, new_xp)
+            self.mechanics.evaluer_etoiles_direct(j_id)
+            xp_distribues.append(f"{joueur_nom} : +{xp_gain} XP")
+
+        res_t1 = f"Victoire {score}" if s1 > s2 else f"Égalité {score}" if s1 == s2 else f"Défaite {score}"
+        res_t2 = f"Victoire {s2}-{s1}" if s2 > s1 else f"Égalité {s2}-{s1}" if s2 == s1 else f"Défaite {s2}-{s1}"
+
+        cursor.execute("""
+            INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, type_match, resultat_j1, resultat_j2) 
+            VALUES (?, ?, ?, '2v2', ?, ?)
+        """, (ids[t1_p1]['id'], ids[t2_p1]['id'], jeu_id, res_t1, res_t2))
+        
+        conn.commit()
         conn.close()
 
-        for pid, gain in xp_gains.items():
-            self.mechanics.check_progression_rewards(pid, db_joueurs[pid], db_joueurs[pid] + gain)
-            self.mechanics.evaluer_etoiles_direct(pid)
-            
-        self._afficher_gains([(t1_p1, xp_gains[id_t1_p1]), (t1_p2, xp_gains[id_t1_p2]), 
-                              (t2_p1, xp_gains[id_t2_p1]), (t2_p2, xp_gains[id_t2_p2])])
-
-        for combo in [self.combo_t1_p1, self.combo_t1_p2, self.combo_t2_p1, self.combo_t2_p2]:
-            combo.setCurrentIndex(0)
+        QMessageBox.information(self, "Succès", "Match 2v2 validé !\n" + "\n".join(xp_distribues))
         self.group_scores_2v2.setExclusive(False)
-        selected_button.setChecked(False)
+        btn_score.setChecked(False)
         self.group_scores_2v2.setExclusive(True)
 
     def _valider_multi(self):
-        jeu = self.combo_jeu_multi.currentText()
+        jeu_nom = self.combo_jeu_multi.currentText()
         gagnant = self.combo_gagnant.currentText()
         
-        autres_joueurs = [cb.currentText() for cb in self.combos_multi_others if "Choisir" not in cb.currentText()]
+        perdants = [cb.currentText() for cb in self.combos_multi_others if "Choisir" not in cb.currentText()]
+        tous_joueurs = [gagnant] + perdants
 
-        if "Choisir" in jeu or "Choisir" in gagnant:
-            QMessageBox.warning(self, "Erreur", "Veuillez choisir un jeu et un gagnant.")
-            return
-            
-        if len(autres_joueurs) < 1:
-            QMessageBox.warning(self, "Erreur", "Il faut au moins 1 perdant.")
+        if "Choisir" in jeu_nom or "Choisir" in gagnant or not perdants or len(set(tous_joueurs)) != len(tous_joueurs):
+            QMessageBox.warning(self, "Erreur", "Sélectionnez un gagnant, au moins un perdant, et évitez les doublons.")
             return
 
-        tous_les_joueurs = [gagnant] + autres_joueurs
-        if len(tous_les_joueurs) != len(set(tous_les_joueurs)):
-            QMessageBox.warning(self, "Erreur", "Un joueur ne peut pas être sélectionné plusieurs fois.")
-            return
-
-        nb_adversaires = len(autres_joueurs)
-        
         conn = self.db.get_connection()
         cursor = conn.cursor()
         
-        try:
-            cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu,))
-            jeu_id = cursor.fetchone()['id']
+        cursor.execute("SELECT id FROM jeux WHERE nom = ?", (jeu_nom,))
+        jeu_id = cursor.fetchone()['id']
 
-            today = datetime.now().strftime("%Y-%m-%d")
-            liste_gains = []
-            joueurs_a_evaluer = []
-
-            cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (gagnant,))
-            j_gagnant = cursor.fetchone()
+        aujourdhui = datetime.now().strftime('%Y-%m-%d')
+        xp_distribues = []
+        
+        for nom in tous_joueurs:
+            cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (nom,))
+            j = cursor.fetchone()
             
-            cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date LIKE ?", (j_gagnant['id'], j_gagnant['id'], f"{today}%"))
-            is_first_match_g = cursor.fetchone()[0] == 0
+            cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date >= ?", (j['id'], j['id'], aujourdhui))
+            premier_match = cursor.fetchone()[0] == 0
             
-            xp_gagnant = self.mechanics.calculate_xp_multi(True, nb_adversaires, is_first_match_g, False)
-            cursor.execute("UPDATE joueurs SET xp_total = xp_total + ? WHERE id = ?", (xp_gagnant, j_gagnant['id']))
+            est_gagnant = (nom == gagnant)
+            xp_gain = self.mechanics.calculate_xp_multi(est_gagnant, len(perdants), premier_match, False)
             
-            joueurs_a_evaluer.append((j_gagnant['id'], j_gagnant['xp_total'], j_gagnant['xp_total'] + xp_gagnant))
-            liste_gains.append((gagnant, xp_gagnant))
+            new_xp = j['xp_total'] + xp_gain
+            cursor.execute("UPDATE joueurs SET xp_total = ? WHERE id = ?", (new_xp, j['id']))
+            self.mechanics.check_progression_rewards(j['id'], j['xp_total'], new_xp)
+            self.mechanics.evaluer_etoiles_direct(j['id'])
+            xp_distribues.append(f"{nom} : +{xp_gain} XP")
 
-            for perdant_nom in autres_joueurs:
-                cursor.execute("SELECT id, xp_total FROM joueurs WHERE surnom = ?", (perdant_nom,))
-                j_perdant = cursor.fetchone()
-                
-                cursor.execute("SELECT COUNT(*) FROM matchs WHERE (joueur1_id = ? OR joueur2_id = ?) AND date LIKE ?", (j_perdant['id'], j_perdant['id'], f"{today}%"))
-                is_first_match_p = cursor.fetchone()[0] == 0
-                
-                xp_perdant = self.mechanics.calculate_xp_multi(False, nb_adversaires, is_first_match_p, False)
-                
-                cursor.execute("INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, resultat_j1, resultat_j2, xp_j1, xp_j2, type_match) VALUES (?, ?, ?, ?, ?, ?, ?, 'Multi')",
-                               (j_gagnant['id'], j_perdant['id'], jeu_id, "Victoire (Multi)", "Défaite (Multi)", xp_gagnant, xp_perdant))
-                
-                cursor.execute("UPDATE joueurs SET xp_total = xp_total + ? WHERE id = ?", (xp_perdant, j_perdant['id']))
-                
-                joueurs_a_evaluer.append((j_perdant['id'], j_perdant['xp_total'], j_perdant['xp_total'] + xp_perdant))
-                liste_gains.append((perdant_nom, xp_perdant))
+        cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (gagnant,))
+        g_id = cursor.fetchone()['id']
+        cursor.execute("SELECT id FROM joueurs WHERE surnom = ?", (perdants[0],))
+        p_id = cursor.fetchone()['id']
 
-            conn.commit()
+        cursor.execute("""
+            INSERT INTO matchs (joueur1_id, joueur2_id, jeu_id, type_match, resultat_j1, resultat_j2) 
+            VALUES (?, ?, ?, 'Multi', 'Victoire Multi', 'Défaite Multi')
+        """, (g_id, p_id, jeu_id))
 
-        except Exception as e:
-            conn.rollback()
-            QMessageBox.critical(self, "Erreur Base de données", f"Impossible d'enregistrer : {str(e)}")
-            conn.close()
-            return
-            
+        conn.commit()
         conn.close()
 
-        for pid, old_xp, new_xp in joueurs_a_evaluer:
-            self.mechanics.check_progression_rewards(pid, old_xp, new_xp)
-            self.mechanics.evaluer_etoiles_direct(pid)
-
-        self._afficher_gains(liste_gains)
-
-        self.combo_jeu_multi.setCurrentIndex(0)
-        self.combo_gagnant.setCurrentIndex(0)
-        for cb in self.combos_multi_others: cb.setCurrentIndex(0)
-
-    def _afficher_gains(self, gains, msg_extra=""):
-        lignes = [f"{nom} : +{xp:.1f} XP" for nom, xp in gains]
-        texte = " MATCH ENREGISTRÉ !\n" + "\n".join(lignes)
-        if msg_extra:
-            texte += f"\n{msg_extra}"
-        self.lbl_feedback.setText(texte)
-        self.lbl_feedback.show()
-        QTimer.singleShot(5000, self.lbl_feedback.hide)
+        QMessageBox.information(self, "Succès", "Match Multijoueur validé !\n" + "\n".join(xp_distribues))
 
     def _apply_stylesheet(self):
         self.setStyleSheet("""
-            #page_title { color: #bc13fe; font-family: 'Orbitron'; font-size: 30px; font-weight: bold; }
-            #lbl_vs { color: #ff0055; font-family: 'Orbitron'; font-size: 36px; font-weight: 900; margin: 0px 20px;}
-            #lbl_feedback { color: #00ff9d; font-family: 'Orbitron'; font-size: 16px; font-weight: bold; background-color: rgba(0, 255, 157, 0.1); border: 1px solid #00ff9d; border-radius: 10px; padding: 15px;}
-            
-            QComboBox { background-color: #050505; color: white; border: 1px solid rgba(0, 243, 255, 0.4); border-radius: 8px; padding: 12px; font-family: 'Rajdhani'; font-size: 20px; min-width: 350px; }
+            QComboBox { background-color: #141928; color: white; border: 1px solid #00f3ff; border-radius: 5px; padding: 12px; font-family: 'Rajdhani'; font-size: 20px; min-width: 350px; }
             
             QRadioButton { color: white; font-family: 'Orbitron'; font-size: 26px; font-weight: bold; margin: 10px; }
             QRadioButton:hover { color: #bc13fe; }
@@ -668,8 +614,9 @@ class SaisieMatchPanel(QWidget):
             #btn_valider { background-color: transparent; color: #00f3ff; font-family: 'Orbitron'; font-size: 26px; font-weight: bold; padding: 20px 80px; border: 2px solid #00f3ff; border-radius: 10px; margin-top: 10px;}
             #btn_valider:hover { background-color: rgba(0, 243, 255, 0.15); border: 2px solid #bc13fe; color: #bc13fe; }
             
-            QTabWidget::pane { border: 1px solid rgba(0, 243, 255, 0.2); background-color: transparent; border-radius: 10px; }
-            QTabBar::tab { background-color: #050505; color: #e0f7fa; font-family: 'Rajdhani'; font-size: 20px; padding: 12px 24px; border: 1px solid rgba(0, 243, 255, 0.2); border-bottom: none; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-            QTabBar::tab:selected { background-color: rgba(0, 243, 255, 0.1); color: #00f3ff; border: 1px solid #00f3ff; border-bottom: none; }
+            QTabWidget::pane { border: 1px solid rgba(0, 243, 255, 0.3); border-radius: 10px; background: rgba(10, 10, 26, 0.8); }
+            QTabBar::tab { background: #141928; color: #aaa; padding: 15px 30px; font-family: 'Orbitron'; font-size: 16px; font-weight: bold; border-top-left-radius: 10px; border-top-right-radius: 10px; margin-right: 2px; border: 1px solid rgba(0, 243, 255, 0.3); border-bottom: none; }
+            QTabBar::tab:selected { background: #00f3ff; color: #050505; border: 1px solid #00f3ff; }
+            QTabBar::tab:hover:!selected { background: rgba(188, 19, 254, 0.3); color: white; }
         """)
 # <VALIDATED>

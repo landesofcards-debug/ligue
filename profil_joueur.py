@@ -3,12 +3,15 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBo
                              QPushButton, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, 
                              QGridLayout, QProgressBar, QDialog, QScrollArea, QCompleter)
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QPixmap, QIcon, QColor
+from PyQt6.QtGui import QIcon
 import qtawesome as qta
 import os
 from controllers.league_mechanics import LeagueMechanics
 
 class RewardDialog(QDialog):
+    """
+    Fenêtre personnalisée pour l'ouverture des lots.
+    """
     def __init__(self, parent, preview_data):
         super().__init__(parent)
         self.setWindowTitle("BUTIN DÉBLOQUÉ")
@@ -99,20 +102,28 @@ class ProfilJoueurPanel(QWidget):
         
         self.etoiles_gauches = []
         self.etoiles_droites = []
+        self.etoiles_couronnes = []
         
         self._setup_ui()
         self._apply_stylesheet()
 
+# <VALIDATED>
     def showEvent(self, event):
         pseudo_actuel = self.combo_recherche.currentText()
         self.combo_recherche.blockSignals(True)
         self._refresh_player_list()
         
+        # Si un joueur était déjà sélectionné, on le remet. 
+        # Sinon, on vide complètement la barre (Index -1) pour faire apparaître le texte grisé.
         if pseudo_actuel and pseudo_actuel != "Sélectionnez un profil...":
             index = self.combo_recherche.findText(pseudo_actuel)
             if index >= 0:
                 self.combo_recherche.setCurrentIndex(index)
-        
+            else:
+                self.combo_recherche.setCurrentIndex(-1)
+        else:
+            self.combo_recherche.setCurrentIndex(-1)
+            
         self.combo_recherche.blockSignals(False)
         self._load_profil()
         super().showEvent(event)
@@ -125,13 +136,15 @@ class ProfilJoueurPanel(QWidget):
         conn.close()
         
         self.combo_recherche.clear()
-        self.combo_recherche.addItem("Sélectionnez un profil...")
+        
+        # On ajoute UNIQUEMENT les vrais joueurs (plus de faux joueur "Sélectionnez...")
         self.combo_recherche.addItems(pseudos)
         
         completer = QCompleter(pseudos)
         completer.setFilterMode(Qt.MatchFlag.MatchContains)
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.combo_recherche.setCompleter(completer)
+# </VALIDATED>
 
     def _get_star_icon(self, star_type):
         conn = self.db.get_connection()
@@ -153,6 +166,7 @@ class ProfilJoueurPanel(QWidget):
                 return QIcon(path)
         return qta.icon("fa5s.star", color=color)
 
+# <VALIDATED>
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(40, 20, 40, 20)
@@ -161,16 +175,22 @@ class ProfilJoueurPanel(QWidget):
         title = QLabel("PROFIL JOUEUR")
         title.setObjectName("page_title")
         
+        # --- MODIFICATION: Combobox centrée, plus large, plus haute et fluide ---
         self.combo_recherche = QComboBox()
         self.combo_recherche.setEditable(True)
-        self.combo_recherche.setFixedWidth(300)
-        self.combo_recherche.currentIndexChanged.connect(self._load_profil)
+        self.combo_recherche.setFixedWidth(400)
+        self.combo_recherche.setFixedHeight(40)
+        self.combo_recherche.lineEdit().setPlaceholderText(" Tapez un nom ou cliquez sur la flèche...")
+        self.combo_recherche.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.combo_recherche.activated.connect(lambda: self._load_profil())
         self.combo_recherche.lineEdit().returnPressed.connect(self._load_profil_from_enter)
         
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self.combo_recherche)
+        header.addStretch()
         layout.addLayout(header)
+        # -------------------------------------------------------------------------
 
         top_split = QHBoxLayout()
 
@@ -216,8 +236,22 @@ class ProfilJoueurPanel(QWidget):
         self.btn_coffre.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_coffre.clicked.connect(self._ouvrir_coffre)
         
-        etoiles_layout = QHBoxLayout()
-        etoiles_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # --- BLOC ÉTOILES (Couronnes + Normales/Pourpres) ---
+        etoiles_global_layout = QVBoxLayout()
+        etoiles_global_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        etoiles_global_layout.setSpacing(8)
+
+        lay_couronnes = QHBoxLayout()
+        lay_couronnes.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay_couronnes.setSpacing(2)
+        for _ in range(6):
+            star = QLabel()
+            star.setFixedSize(20, 20)
+            self.etoiles_couronnes.append(star)
+            lay_couronnes.addWidget(star)
+
+        etoiles_basses_layout = QHBoxLayout()
+        etoiles_basses_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         lay_gauches = QHBoxLayout()
         lay_gauches.setSpacing(2)
@@ -235,9 +269,13 @@ class ProfilJoueurPanel(QWidget):
             self.etoiles_droites.append(star)
             lay_droites.addWidget(star)
             
-        etoiles_layout.addLayout(lay_gauches)
-        etoiles_layout.addSpacing(15)
-        etoiles_layout.addLayout(lay_droites)
+        etoiles_basses_layout.addLayout(lay_gauches)
+        etoiles_basses_layout.addSpacing(15)
+        etoiles_basses_layout.addLayout(lay_droites)
+        
+        etoiles_global_layout.addLayout(lay_couronnes)
+        etoiles_global_layout.addLayout(etoiles_basses_layout)
+        # -------------------------------------------------------------
         
         bloc_gauche_layout.addWidget(self.btn_image_profil, alignment=Qt.AlignmentFlag.AlignCenter)
         bloc_gauche_layout.addWidget(self.lbl_nom)
@@ -248,7 +286,7 @@ class ProfilJoueurPanel(QWidget):
         bloc_gauche_layout.addSpacing(20) 
         bloc_gauche_layout.addWidget(self.btn_coffre, alignment=Qt.AlignmentFlag.AlignCenter)
         bloc_gauche_layout.addSpacing(10)
-        bloc_gauche_layout.addLayout(etoiles_layout)
+        bloc_gauche_layout.addLayout(etoiles_global_layout)
         bloc_gauche_layout.addStretch() 
         
         top_split.addWidget(self.frame_identite)
@@ -295,7 +333,6 @@ class ProfilJoueurPanel(QWidget):
         self.card_ratios.layout().addLayout(self.layout_ratios_jeux)
         self.grid_stats.addWidget(self.card_ratios, 1, 1)
 
-        # --- MODIFICATION V2: Carte 5 devient la zone BOSS (Grand, Scrollable) ---
         self.card_event = self._create_stat_card(" DÉFIS BOSS ACTIFS", "fa5s.dragon", "#ff0055")
         self.card_event.setStyleSheet("background: rgba(255, 0, 85, 0.05); border: 2px solid #ff0055; border-radius: 10px;")
         
@@ -341,7 +378,7 @@ class ProfilJoueurPanel(QWidget):
         self.table_historique.setHorizontalHeaderLabels(["Date", "Jeu", "Adversaire", "Résultat"])
         self.table_historique.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table_historique)
-
+# </VALIDATED>
     def _create_stat_card(self, title_text, icon_name, color):
         card = QFrame()
         card.setObjectName("stat_card")
@@ -536,7 +573,14 @@ class ProfilJoueurPanel(QWidget):
         
         icon_normale = self._get_star_icon("normale")
         icon_pourpre = self._get_star_icon("pourpre")
+        icon_couronne = self._get_star_icon("couronne")
         
+        for i, star_label in enumerate(self.etoiles_couronnes):
+            if i < joueur['couronne_max']:
+                star_label.setPixmap(icon_couronne.pixmap(18, 18))
+            else:
+                star_label.setPixmap(qta.icon("fa5s.crown", color="#333333").pixmap(18, 18))
+
         for i, star_label in enumerate(self.etoiles_gauches): 
             if i < joueur['etoiles_normales']:
                 star_label.setPixmap(icon_normale.pixmap(18, 18))
@@ -656,7 +700,6 @@ class ProfilJoueurPanel(QWidget):
                 
                 self.layout_ratios_jeux.addLayout(v_lay)
 
-        # --- NOUVEAUTÉ V2 : RÉCUPÉRATION DU BOSS ACTIF ---
         self._clear_layout(self.layout_boss_list)
         
         cursor.execute("""
@@ -679,8 +722,6 @@ class ProfilJoueurPanel(QWidget):
             for boss in bosses:
                 self.layout_boss_list.addWidget(self._create_boss_item_widget(boss, base_dir))
 
-
-        # --- NOUVEAUTÉ V2 : RÉCUPÉRATION DU CONTRAT CIBLE ---
         self._clear_layout(self.layout_cibles)
 
         cursor.execute("""

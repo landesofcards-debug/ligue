@@ -1,7 +1,9 @@
 # <VALIDATED>
 import os
+# <VALIDATED>
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QPushButton, QLabel, QStackedWidget, QInputDialog, QLineEdit, QMessageBox, QFrame)
+                             QPushButton, QStackedWidget, QInputDialog, QLineEdit, QMessageBox, QFrame)
+# </VALIDATED>
 from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtCore import Qt, QSize
 import qtawesome as qta
