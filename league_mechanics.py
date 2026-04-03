@@ -1,5 +1,4 @@
 # <VALIDATED>
-import sqlite3
 import random
 from datetime import datetime, timedelta
 
@@ -48,7 +47,6 @@ class LeagueMechanics:
         conn.commit()
         conn.close()
 
-# <VALIDATED>
     def _executer_reset_hebdomadaire(self, cursor, nouvelle_date: str):
         """Exécute les calculs de fin de semaine (Ratio Positif) puis remet à zéro le suivi."""
         cursor.execute("SELECT valeur FROM systeme WHERE cle = 'dernier_reset_mardi'")
@@ -95,11 +93,10 @@ class LeagueMechanics:
         if not rapport_lignes:
             rapport_lignes.append("Aucun joueur n'a eu un ratio positif et aucun Boss n'a survécu cette semaine.")
 
-        # --- SAUVEGARDE DU RAPPORT EN BDD ---
         texte_final = "\n".join(rapport_lignes)
         cursor.execute("INSERT OR REPLACE INTO systeme (cle, valeur) VALUES ('alerte_hebdo', '1')")
         cursor.execute("INSERT OR REPLACE INTO systeme (cle, valeur) VALUES ('rapport_hebdo', ?)", (texte_final,))
-# <VALIDATED>
+
     def _ajouter_etoiles(self, cursor, joueur_id: int, nb_etoiles: int):
         cursor.execute("SELECT etoiles_normales, etoiles_pourpres, couronne_max FROM joueurs WHERE id = ?", (joueur_id,))
         j = cursor.fetchone()
@@ -229,7 +226,7 @@ class LeagueMechanics:
             if score_joueur == 2 and score_adversaire == 0: pts = params.get('victoire_2_0', 3.0)
             elif score_joueur == 2 and score_adversaire == 1: pts = params.get('victoire_2_1', 2.0)
             else: pts = params.get('victoire_autre', 1.5)
-            if est_boss: pts += params.get('bonus_boss', 3.0) # Gardé pour compatibilité mais géré en manuel dans _valider_1v1
+            if est_boss: pts += params.get('bonus_boss', 3.0)
         elif score_joueur == score_adversaire: pts = params.get('egalite', 1.0)
         else: pts = params.get('defaite', 1.0)
 
@@ -395,6 +392,7 @@ class LeagueMechanics:
             "jeux": jeux
         }
 
+# <VALIDATED>
     def generate_rewards_preview(self, player_id: int) -> dict:
         status = self.get_rewards_status(player_id)
         niv_dus = status['attente_niveaux']
@@ -425,6 +423,13 @@ class LeagueMechanics:
                     jeu_id = j['id']
                     nb_max = j['nb_cartes_promo']
                     
+                    # --- FIX : Gestion des jeux sans cartes promos (ex: Naruto) ---
+                    if nb_max <= 0:
+                        recompense_fixe = j['recompense_palier'] if j['recompense_palier'] else "Lot de Palier"
+                        options_tirage.append(f"{recompense_fixe} ({j['nom']})")
+                        continue
+                    # --------------------------------------------------------------
+                    
                     cursor.execute("SELECT numero_tire FROM tirages_promos WHERE joueur_id = ? AND jeu_id = ?", (player_id, jeu_id))
                     deja_tires = set(row['numero_tire'] for row in cursor.fetchall())
                     
@@ -452,6 +457,7 @@ class LeagueMechanics:
             "pal_dus": pal_dus,
             "draws": drawn_cards_to_save
         }
+# <VALIDATED>
 
     def confirm_rewards_claim(self, player_id: int, preview_data: dict):
         conn = self.db.get_connection()
@@ -472,7 +478,6 @@ class LeagueMechanics:
         conn.commit()
         conn.close()
 
-# <VALIDATED>
     def reset_season(self):
         conn = self.db.get_connection()
         cursor = conn.cursor()
@@ -483,7 +488,8 @@ class LeagueMechanics:
             cursor.execute("DELETE FROM event_boss_essais")
             cursor.execute("DELETE FROM event_tueurs")
             cursor.execute("DELETE FROM event_boss")
-            cursor.execute("UPDATE joueurs SET xp_total = 0.0, niveau = 0, etoiles_normales = 0, etoiles_pourpres = 0, couronne_max = 0")
+            # Ajout de la remise à zéro de titre_rpg pour une propreté absolue
+            cursor.execute("UPDATE joueurs SET xp_total = 0.0, niveau = 0, etoiles_normales = 0, etoiles_pourpres = 0, couronne_max = 0, titre_rpg = 'Novice'")
             cursor.execute("UPDATE lots SET dus_niveau = 0, donnes_niveau = 0, dus_palier = 0, donnes_palier = 0")
             conn.commit()
             return True
@@ -492,7 +498,6 @@ class LeagueMechanics:
             return False
         finally:
             conn.close()
-# </VALIDATED>
 
     def generer_contrats_tueurs(self, jeu_id: int):
         conn = self.db.get_connection()
@@ -513,7 +518,6 @@ class LeagueMechanics:
         conn.commit()
         conn.close()
 
-# <VALIDATED>
     def verifier_et_valider_contrat(self, vainqueur_id: int, perdant_id: int, jeu_id: int) -> bool:
         conn = self.db.get_connection()
         cursor = conn.cursor()
@@ -524,10 +528,8 @@ class LeagueMechanics:
         
         if contrat:
             contrat_id = contrat['id']
-            # Le chasseur accomplit son contrat
             cursor.execute("UPDATE event_tueurs SET statut = 'TERMINE' WHERE id = ?", (contrat_id,))
             
-            # On cherche qui était la cible de la victime pour maintenir la chaîne (Round-Robin)
             cursor.execute("SELECT id, cible_id FROM event_tueurs WHERE chasseur_id = ? AND jeu_id = ? AND statut = 'ACTIF'",
                            (perdant_id, jeu_id))
             contrat_perdant = cursor.fetchone()
@@ -535,17 +537,13 @@ class LeagueMechanics:
             nouvelle_cible_id = None
             if contrat_perdant:
                 nouvelle_cible_id = contrat_perdant['cible_id']
-                # Annule le contrat de la victime puisqu'elle est éliminée/transférée
                 cursor.execute("UPDATE event_tueurs SET statut = 'ANNULE' WHERE id = ?", (contrat_perdant['id'],))
             else:
-                # Sécurité (Fallback) si la victime n'avait pas de contrat actif
                 cursor.execute("SELECT joueur_id FROM joueurs_jeux WHERE jeu_id = ? AND joueur_id != ?", (jeu_id, vainqueur_id))
                 cibles_potentielles = [row['joueur_id'] for row in cursor.fetchall()]
                 if cibles_potentielles:
-                    import random
                     nouvelle_cible_id = random.choice(cibles_potentielles)
 
-            # Si la nouvelle cible est valide et n'est pas le chasseur lui-même (fin de la boucle)
             if nouvelle_cible_id and nouvelle_cible_id != vainqueur_id:
                 cursor.execute("INSERT INTO event_tueurs (chasseur_id, cible_id, jeu_id) VALUES (?, ?, ?)", 
                                (vainqueur_id, nouvelle_cible_id, jeu_id))
@@ -556,7 +554,6 @@ class LeagueMechanics:
             
         conn.close()
         return False
-# </VALIDATED>
 
     def executer_combat_boss(self, joueur_id: int, boss_id: int, victoire_joueur: bool) -> dict:
         conn = self.db.get_connection()
@@ -580,7 +577,6 @@ class LeagueMechanics:
         else:
             nouvelles_victoires = boss['victoires_actuelles'] + 1
             if nouvelles_victoires >= boss['victoires_requises']:
-                # CORRECTION : Le boss l'emporte, il encaisse 3 XP
                 cursor.execute("UPDATE event_boss SET victoires_actuelles = ?, statut = 'TERMINE' WHERE id = ?", (nouvelles_victoires, boss_id))
                 cursor.execute("UPDATE joueurs SET xp_total = xp_total + 3.0 WHERE id = ?", (boss['joueur_id'],))
                 msg = "LE BOSS ATTEINT SON OBJECTIF ET REMPORTE 3 XP !"

@@ -16,6 +16,8 @@ class DatabaseManager:
     def get_connection(self):
         conn = sqlite3.connect(self.db_name)
         conn.row_factory = sqlite3.Row
+        # CRUCIAL : Activation des clés étrangères pour que le ON DELETE CASCADE fonctionne
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _create_tables(self):
@@ -71,15 +73,13 @@ class DatabaseManager:
                 xp_j1 REAL DEFAULT 0.0, 
                 xp_j2 REAL DEFAULT 0.0, 
                 est_boost BOOLEAN DEFAULT 0, 
-                FOREIGN KEY (joueur1_id) REFERENCES joueurs(id), 
-                FOREIGN KEY (joueur2_id) REFERENCES joueurs(id), 
-                FOREIGN KEY (jeu_id) REFERENCES jeux(id)
+                FOREIGN KEY (joueur1_id) REFERENCES joueurs(id) ON DELETE CASCADE, 
+                FOREIGN KEY (joueur2_id) REFERENCES joueurs(id) ON DELETE CASCADE, 
+                FOREIGN KEY (jeu_id) REFERENCES jeux(id) ON DELETE CASCADE
             )
         ''')
         
-        cursor.execute('''CREATE TABLE IF NOT EXISTS evenements_boss (id INTEGER PRIMARY KEY AUTOINCREMENT, jeu_id INTEGER, nom_boss TEXT NOT NULL, statut TEXT DEFAULT 'ACTIF', pv_max INTEGER DEFAULT 4, pv_actuels INTEGER DEFAULT 4, objectif INTEGER DEFAULT 4, victoires INTEGER DEFAULT 0, image_url TEXT, FOREIGN KEY (jeu_id) REFERENCES jeux(id))''')
-        
-        # --- NOUVELLES TABLES ÉVÉNEMENTS RPG ---
+        # --- TABLES ÉVÉNEMENTS RPG ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS event_boss (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,6 +200,7 @@ class DatabaseManager:
         
         conn.commit()
         conn.close()
+
     def supprimer_boss(self, boss_id):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -222,5 +223,4 @@ class DatabaseManager:
         except Exception:
             conn.rollback()
             return False
-# <VALIDATED>        
-#
+# <VALIDATED>
